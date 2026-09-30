@@ -1,5 +1,10 @@
 import os
 import logging
+from tests.common import gpt2_bytes_to_unicode
+from cs336_basics.io_utils import serialize_merges
+from cs336_basics.io_utils import deserialize_merges
+from cs336_basics.io_utils import serialize_vocab
+from cs336_basics.io_utils import deserialize_vocab
 
 # Create a logger specific to this file module
 logger = logging.getLogger(__name__)
@@ -14,6 +19,11 @@ console_handler.setFormatter(formatter)
 
 # Add the handler to your logger
 logger.addHandler(console_handler)
+
+# def gpt2_unicode_to_bytes()->dict[str,int]:
+
+
+
 
 def run_train_bpe(
     input_path: str | os.PathLike,
@@ -76,7 +86,8 @@ def run_train_bpe(
     incremental_counts_by_token_pair = {}
 
     # optimization 2
-    # pretokens_by_token_pair = {}
+    # dict of token pairs as keys, set of pretoken strings as values
+    pretokens_by_token_pair = {}
 
     i=0
     for j in range(256):    #logger.debug(f"i is {i} with char {chr(i)}")
@@ -87,6 +98,9 @@ def run_train_bpe(
         i+=1
 
     logger.debug(f"Initial vocab dict {vocab}")
+
+
+    pretokens_eligible_list = []
 
     # a list of token ID pairs, sorted by their counts in descending order
 
@@ -136,6 +150,8 @@ def run_train_bpe(
                 #sorted_counts[(token0,token1)] = sorted_counts.get((token0,token1),0) + pretoken_freq
                 # logger.debug(f"Token {token0} {token1}")
                 counts_by_tokenpair[(token0,token1)] = counts_by_tokenpair.get((token0,token1),0) + pretoken_freq
+                pretokens_by_token_pair[(token0,token1)] =pretokens_by_token_pair.get((token0,token1),set())
+                pretokens_by_token_pair[(token0, token1)].add(pretoken)
                     # else:
                     #     if (last_pair is not None and last_pair!=(token0,token1)):
 
@@ -193,6 +209,30 @@ def run_train_bpe(
         # return (max_key,max_val)
 
     def apply_top_merge(token_pair,freq):
+
+        def apply_decrement(t0,t1,delta_index,deltas_set,pretoken_frequency,log_mesg):
+            if ((t0, t1), delta_index) not in deltas_set:
+                incremental_counts_by_token_pair[(t0, t1)] = incremental_counts_by_token_pair.get((t0, t1),
+                                                                                                  0) - pretoken_frequency
+                if incremental_counts_by_token_pair[(t0, t1)] == 0:
+                    logger.debug(f"HOORAY {(t0,t1)} WENT TO ZERO")
+                    del incremental_counts_by_token_pair[(t0, t1)]
+                    if (t0,t1) in pretokens_by_token_pair:
+                        del pretokens_by_token_pair[(t0, t1)]
+            else:
+                logger.debug(log_mesg)
+            deltas_set.add(((t0, t1), delta_index))
+
+        def apply_increment(t0,t1,delta_index,log_mesg,pretoken_frequency,pretoken):
+            if ((t0, t1), delta_index) not in deltas_set:
+                logger.debug(log_mesg)
+                incremental_counts_by_token_pair[(t0, t1)] = incremental_counts_by_token_pair.get((t0, t1),
+                                                                                                  0) + pretoken_frequency
+                pretokens_by_token_pair[(t0,t1)] =pretokens_by_token_pair.get((t0,t1),set())
+                pretokens_by_token_pair[(t0, t1)].add(pretoken)
+            deltas_set.add(((t0, t1), delta_index))
+
+
         new_token_id = len(vocab)
         # the byte string concatenation
         vocab[new_token_id] = vocab[token_pair[0]] + vocab[token_pair[1]]
@@ -205,9 +245,13 @@ def run_train_bpe(
 
         # logger.debug(f"pretoken size {len(tokens_by_pretoken)}")
 
+        pretokens_eligible = 0
 
+        pretoken_set = pretokens_by_token_pair[(token_pair[0],token_pair[1])]
+        for pretoken in pretoken_set:
+            token_ints = tokens_by_pretoken[pretoken]
 
-        for pretoken,token_ints in tokens_by_pretoken.items():
+        #for pretoken,token_ints in tokens_by_pretoken.items():
 
             debug_mode = token_ints == DEBUG_TOKEN_INTS
             pretoken_frequency = counts_by_pretoken[pretoken]
@@ -223,23 +267,16 @@ def run_train_bpe(
                     insertion_indices_len += 1
                 counter += 1
             token_int_len = counter + 1
-            # for counter in range(token_int_len-1):
-            #     if token_ints[counter]==token_pair[0] and token_ints[counter+1]==token_pair[1]:
-            #         insertion_indices.append(counter)
-            #         insertion_indices_len+=1
-            # skip this pre token if nothing is to be replaced
-
-            # logger.debug(f"Insertion indices {insertion_indices}")
-            # prev_match = -1
             if insertion_indices_len == 0:
                 continue
+            else:
+                pretokens_eligible+=1
 
             if CHECK_INVARIANTS:
                 new_list = []
                 counter = 0
                 merge = False
                 # logger.debug(f"token ints {token_ints} token_pair {token_pair}")
-
                 if token_pair[0] in token_ints or token_pair[1] in token_ints:
                     while counter < token_int_len:
                         if counter<(token_int_len-1) and token_ints[counter] == token_pair[0] and token_ints[counter+1] == token_pair[1]:
@@ -250,9 +287,6 @@ def run_train_bpe(
                             new_list.append(token_ints[counter])
                             counter+=1
                 if merge:
-                    # logger.debug(f"Pretoken {pretoken} with token ints {token_ints }")
-                    # logger.debug(f" New list {new_list }")
-
                     if debug_mode:
                         logger.debug(f"Old list {token_ints} New list {new_list}")
                         before = get_counts_by_token_pair(tokens_by_pretoken,counts_by_pretoken)
@@ -263,8 +297,6 @@ def run_train_bpe(
                         #assert(False)
                     else:
                         tokens_by_pretoken[pretoken] = new_list
-
-
 
             delta = 3
             for counter in range(insertion_indices_len):
@@ -280,7 +312,6 @@ def run_train_bpe(
                         # assert(False)
 
             if delta ==1:
-
                 insertion_indices_pruned = []
                 insertion_indices_pruned_len = 0
                 insertion_indices_pruned.append(insertion_indices[0])
@@ -312,53 +343,29 @@ def run_train_bpe(
                 if insertion_index == 0:
                     if token_int_len > 2:
                         t0, t1 =  token_ints[insertion_index + 1], token_ints[insertion_index + 2]
-                        if ((t0,t1),(insertion_index + 1)) not in deltas_set:
-                            # logger.debug(f"At very left, decrementing right neighbor {(t0, t1)} at by {pretoken_frequency}")
-                            incremental_counts_by_token_pair[(t0, t1)] = incremental_counts_by_token_pair.get((t0, t1),0) - pretoken_frequency
-                            if incremental_counts_by_token_pair[(t0,t1)] == 0:
-                                # logger.debug(f"HOORAY {(t0,t1)} WENT TO ZERO")
-                                del incremental_counts_by_token_pair[(t0,t1)]
-                        else:
-                            logger.debug(f"edge case {insertion_index + 1} with right neighbor was already decremented")
-                        deltas_set.add(((t0,t1),insertion_index+1))
+                        delta_index =insertion_index + 1
+                        log_mesg = f"edge case {delta_index} with right neighbor was already decremented"
+                        apply_decrement(t0, t1, delta_index, deltas_set, pretoken_frequency, log_mesg)
                 elif insertion_index == (token_int_len - 2):
                     # at very right
                     if token_int_len > 2:
                         t0, t1 = token_ints[insertion_index -1], token_ints[insertion_index ]
-                        if ((t0,t1),(insertion_index -1)) not in deltas_set:
-                            # logger.debug(f"At very right, decrementing left neighbor {(t0, t1)} at by {pretoken_frequency}")
-                            incremental_counts_by_token_pair[(t0, t1)] = incremental_counts_by_token_pair.get((t0, t1),0) - pretoken_frequency
-                            if incremental_counts_by_token_pair[(t0,t1)] == 0:
-                                # logger.debug(f"HOORAY {(t0,t1)} WENT TO ZERO")
-                                del incremental_counts_by_token_pair[(t0,t1)]
-                        else:
-                            logger.debug(f"edge case {(insertion_index -1)} with left neighbor was already decremented")
-                        deltas_set.add(((t0,t1),insertion_index -1))
+                        delta_index = insertion_index - 1
+                        log_mesg = f"edge case {delta_index} with left neighbor was already decremented"
+                        apply_decrement(t0, t1, delta_index, deltas_set, pretoken_frequency, log_mesg)
                 # in the moddle
                 else:
                     if token_int_len > 3:
                         # something is flanking on left
                         t0, t1 = token_ints[insertion_index - 1], token_ints[insertion_index]
-                        if ((t0,t1),(insertion_index-1)) not in deltas_set:
-                            # logger.debug(f"decrementing left neighbor {(t0, t1)} at index {insertion_index - 1} by {pretoken_frequency}")
-                            incremental_counts_by_token_pair[(t0, t1)] = incremental_counts_by_token_pair.get((t0, t1),0) - pretoken_frequency
-                            if incremental_counts_by_token_pair[(t0,t1)] == 0:
-                                # logger.debug(f"HOORAY {(t0,t1)} WENT TO ZERO")
-                                del incremental_counts_by_token_pair[(t0,t1)]
-                        else:
-                            logger.debug(f"edge case {(insertion_index-1)} with flanking neighbors was already decremented")
-                        deltas_set.add(((t0,t1),insertion_index-1))
+                        delta_index = insertion_index - 1
+                        log_mesg = f"edge case {delta_index} with flanking neighbors was already decremented"
+                        apply_decrement(t0, t1, delta_index, deltas_set, pretoken_frequency, log_mesg)
                         # something is flanking on right
                         t0, t1 = token_ints[insertion_index +1], token_ints[insertion_index+2]
-                        if ((t0,t1),(insertion_index +1)) not in deltas_set:
-                            # logger.debug(f"decrementing right neighbor {(t0, t1)} at index {insertion_index + 1} by {pretoken_frequency}")
-                            incremental_counts_by_token_pair[(t0, t1)] = incremental_counts_by_token_pair.get((t0, t1),0) - pretoken_frequency
-                            if incremental_counts_by_token_pair[(t0,t1)] == 0:
-                                # logger.debug(f"HOORAY {(t0,t1)} WENT TO ZERO")
-                                del incremental_counts_by_token_pair[(t0,t1)]
-                        else:
-                            logger.debug(f"edge case {(insertion_index +1)} with flanking neighbors was already decremented")
-                        deltas_set.add(((t0,t1),insertion_index +1))
+                        delta_index = insertion_index + 1
+                        log_mesg = f"edge case {delta_index} with flanking neighbors was already decremented"
+                        apply_decrement(t0, t1, delta_index, deltas_set, pretoken_frequency, log_mesg)
                 logger.debug(f"Decrement set {deltas_set}")
 
             new_list2 = token_ints.copy()
@@ -382,14 +389,16 @@ def run_train_bpe(
                     if counter == 0:
                         if token_int_len > 1:
                             t0, t1 =  new_list2[counter], new_list2[counter + 1]
-                            if ((t0, t1), (counter)) not in deltas_set:
-                                # logger.debug(f"At very left, incrementing right neighbor {(t0, t1)} at by {pretoken_frequency}")
-                                incremental_counts_by_token_pair[(t0, t1)] = incremental_counts_by_token_pair.get((t0, t1),0) + pretoken_frequency
-                            deltas_set.add(((t0, t1), counter ))
+                            delta_index = counter
+                            log_mesg = f"At very left, incrementing right neighbor {(t0, t1)} at by {pretoken_frequency}"
+                            apply_increment(t0,t1,delta_index,log_mesg,pretoken_frequency,pretoken)
                     elif counter == (token_int_len - 1):
                         # at very right
                         if token_int_len > 1:
                             t0, t1 = new_list2[counter-1], new_list2[counter]
+                            delta_index = counter-1
+                            log_mesg = f"At very right, incrementing left neighbor {(t0, t1)} at by {pretoken_frequency}"
+                            apply_increment(t0,t1,delta_index,log_mesg,pretoken_frequency,pretoken)
                             if ((t0, t1), (counter - 1)) not in deltas_set:
                                 # logger.debug(f"At very right, incrementing left neighbor {(t0, t1)} at by {pretoken_frequency}")
                                 incremental_counts_by_token_pair[(t0, t1)] = incremental_counts_by_token_pair.get((t0, t1),0) + pretoken_frequency
@@ -399,16 +408,14 @@ def run_train_bpe(
                         if token_int_len > 2:
                             # something is flanking on left
                             t0, t1 = new_list2[counter - 1], new_list2[counter]
-                            if ((t0, t1), (counter - 1)) not in deltas_set:
-                                # logger.debug(f"Incrementing left neighbor {(t0, t1)} at index {counter - 1} by {pretoken_frequency}")
-                                incremental_counts_by_token_pair[(t0, t1)] = incremental_counts_by_token_pair.get((t0, t1),0) + pretoken_frequency
-                            deltas_set.add(((t0, t1), counter-1))
+                            delta_index = counter-1
+                            log_mesg = f"Incrementing left neighbor {(t0, t1)} at index {counter - 1} by {pretoken_frequency}"
+                            apply_increment(t0,t1,delta_index,log_mesg,pretoken_frequency,pretoken)
                             # something is flanking on right
                             t0, t1 = new_list2[counter ], new_list2[counter+1]
-                            if ((t0, t1), (counter )) not in deltas_set:
-                                # logger.debug(f"Incrementing right neighbor {(t0, t1)} at index {counter} by {pretoken_frequency}")
-                                incremental_counts_by_token_pair[(t0, t1)] = incremental_counts_by_token_pair.get((t0, t1),0) + pretoken_frequency
-                            deltas_set.add(((t0, t1), counter))
+                            delta_index = counter
+                            log_mesg = f"Incrementing right neighbor {(t0, t1)} at index {counter} by {pretoken_frequency}"
+                            apply_increment(t0,t1,delta_index,log_mesg,pretoken_frequency,pretoken)
 
             # decrementing all obsoleted pairs
             if insertion_indices_len> 0 and (token_pair[0], token_pair[1]) in incremental_counts_by_token_pair :
@@ -418,6 +425,8 @@ def run_train_bpe(
                 if incremental_counts_by_token_pair[(token_pair[0], token_pair[1])] == 0:
                     # logger.debug(f"HOORAY {(token_pair[0], token_pair[1])} WENT TO ZERO")
                     del incremental_counts_by_token_pair[(token_pair[0], token_pair[1])]
+                    if (token_pair[0],token_pair[1]) in pretokens_by_token_pair:
+                        del pretokens_by_token_pair[(token_pair[0],token_pair[1])]
             # elif incremental_counts_by_token_pair[(token_pair[0], token_pair[1])] <0:
             #     logger.debug(f"OH NO WENT BELOWZERO")
 
@@ -431,6 +440,7 @@ def run_train_bpe(
                     debug_dicts(incremental_counts_by_token_pair, counts_by_token_pair_oracle)
                 assert (incremental_counts_by_token_pair == counts_by_token_pair_oracle)
 
+        pretokens_eligible_list.append(pretokens_eligible)
         return new_token_id
 
     def debug_dicts(incremental, truth):
@@ -473,6 +483,14 @@ def run_train_bpe(
                 logger.debug(f"Ending with vocab length {len(vocab)} . Aborting")
                 break
             i+=1
+        # with open('merges_out.txt','w') as fout:
+        #     for (merge0,merge1) in merges:
+        #         fout.write(f"{merge0},{merge1}\n")
+
+
+
+
+
 
 
 
@@ -482,6 +500,32 @@ def run_train_bpe(
     incremental_counts_by_token_pair = get_counts_by_token_pair(tokens_by_pretoken,counts_by_pretoken)
     logger.debug(f"Baseline: {incremental_counts_by_token_pair}")
     apply_merges()
+    # logger.info(f"Merges {merges}")
+
+    # unicode_to_bytes =  {v: k for k, v in gpt2_bytes_to_unicode().items()}
+    # print(f"{unicode_to_bytes}")
+    # with open('merges_out2.txt', 'wb') as fout:
+    #     for (merge0, merge1) in merges:
+    #         fout.write(merge0)
+    #         fout.write(" ".encode("utf-8"))
+    #         fout.write(merge1)
+    #         fout.write("\n".encode("utf-8"))
+
+
+
+    #         fout.write(f"{unicode_to_bytes[merge0]},{unicode_to_bytes[merge1]}\n")
     # raise NotImplementedError
+    #
+    # fname = input_path.name
+    # serialize_vocab('vocab_' + fname,vocab)
+    # vocab2 = deserialize_vocab('vocab_' + fname)
+    # assert (vocab==vocab2)
+    # serialize_merges('merges_' + fname,merges)
+    # merge2 = deserialize_merges('merges_' + fname)
+    # assert(merge2==merges)
+    debug = True
+    if debug:
+        avg = sum(pretokens_eligible_list)/len(pretokens_eligible_list)
+        logger.debug(f"Average hit is {avg} and proportion is {avg/len(tokens_by_pretoken)}")
     return (vocab,merges)
     # raise NotImplementedError
