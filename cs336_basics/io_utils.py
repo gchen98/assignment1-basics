@@ -1,5 +1,21 @@
 from functools import lru_cache
 import json
+import logging
+
+# Create a logger specific to this file module
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+# Create a console handler
+console_handler = logging.StreamHandler()
+
+# Create a formatting layout
+formatter = logging.Formatter('%(name)s - %(levelname)s - %(message)s')
+console_handler.setFormatter(formatter)
+
+# Add the handler to your logger
+logger.addHandler(console_handler)
+
 
 @lru_cache
 def gpt2_bytes_to_unicode() -> dict[int, str]:
@@ -85,12 +101,21 @@ def serialize_vocab(vocab_file,vocab):
     bytes2unicode = gpt2_bytes_to_unicode()
     remapped_vocab = {}
     unique_terms = set()
+    longest = 0
+    longest_term = None
     for k,v in vocab.items():
         v2 = [bytes2unicode[t] for t in v]
+        v2_len = len(v2)
         v2str = ''.join(v2)
+        if v2_len> longest:
+            longest = v2_len
+            longest_term = v2str
+        if v2str in unique_terms:
+            logger.error(f"WARNING: {v2str} is already in the vocabulary!")
         unique_terms.add(v2str)
         #print(f"{v2str}")
         remapped_vocab[v2str] = k
+    logger.info(f"Longest term is {longest_term}")
     assert(len(unique_terms)==len(vocab))
     with open(vocab_file,"w",encoding="utf-8") as f:
         json.dump(remapped_vocab,f,indent=4,ensure_ascii=False)
