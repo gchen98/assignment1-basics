@@ -1,10 +1,12 @@
 import os
 import logging
-from tests.common import gpt2_bytes_to_unicode
-from cs336_basics.io_utils import serialize_merges
-from cs336_basics.io_utils import deserialize_merges
-from cs336_basics.io_utils import serialize_vocab
-from cs336_basics.io_utils import deserialize_vocab
+from collections import Counter
+import time
+import regex as re
+import itertools
+from concurrent.futures import ProcessPoolExecutor
+
+from cs336_basics.io_utils import find_chunk_boundaries
 
 # Create a logger specific to this file module
 logger = logging.getLogger(__name__)
@@ -19,6 +21,25 @@ console_handler.setFormatter(formatter)
 
 # Add the handler to your logger
 logger.addHandler(console_handler)
+
+
+def get_pretoken_counts_worker(special_tokens: list[str], filename: str, start_end: tuple[int, int]) -> dict[str, int]:
+    PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
+    counts: dict[str, int] = Counter({})
+    (start, end) = start_end
+    with open(filename, 'rb') as f:
+        f.seek(start)
+        chunk = f.read(end - start).decode("utf-8")
+        regex_pattern = "|".join(map(re.escape, special_tokens))
+        # only taking the first 'document' for prototyping. when things are working, will generalize remaining code into a function and loop over elements
+        file_content_docs = re.split(regex_pattern, chunk)
+        for file_content in file_content_docs:
+            # logger.debug(f"regex pattern is {regex_pattern} Filtered {file_content}")
+            pretoken_iter = re.finditer(PAT, file_content)
+            for pretoken in pretoken_iter:
+                pretoken_str = pretoken.group(0)
+                counts[pretoken_str] = counts.get(pretoken_str, 0) + 1
+    return counts
 
 def run_train_bpe(
     input_path: str | os.PathLike,
@@ -47,9 +68,7 @@ def run_train_bpe(
                 representing that <token1> was merged with <token2>.
                 Merges are ordered by order of creationprint(.
     """
-    import regex as re
-    import os
-    import itertools
+
 
 
     CHECK_INVARIANTS = False
@@ -66,7 +85,7 @@ def run_train_bpe(
     # should be generalized to a Unicode code point
 
     # this variable contains the total counts on the corpus for each "word"/"pretoken"
-    counts_by_pretoken = {}
+    counts_by_pretoken = Counter({})
 
     # this variable contains a list of ints that represent the byte array for a token ID
     tokens_by_pretoken = {}
@@ -112,9 +131,31 @@ def run_train_bpe(
                 for pretoken in pretoken_iter:
                     pretoken_str = pretoken.group(0)
                     counts_by_pretoken[pretoken_str] = counts_by_pretoken.get(pretoken_str, 0) + 1
-
         for pretoken in counts_by_pretoken.keys():
             tokens_by_pretoken[pretoken] = list(pretoken.encode("utf-8"))
+
+
+
+    def load_file_parallel(num_processes:int,infile: str | os.PathLike,special_tokens:list[str]):
+        split_bytes = "|".join(map(re.escape, special_tokens)).encode("utf-8")
+        # chunk_counts = Counter({})
+        # token_lists = {}
+        document_delimiter = "<|endoftext|>".encode("utf-8")
+        with open(infile, 'rb') as f:
+            boundaries = find_chunk_boundaries(f, num_processes, document_delimiter)
+            start_end_list = [(start, end) for start, end in zip(boundaries[:-1], boundaries[1:])]
+            logger.debug(f"Boundaries are {start_end_list}")
+            with ProcessPoolExecutor() as executor:
+                # executor.map applies the function to each element in parallel
+                parallel_list = list(executor.map(get_pretoken_counts_worker, itertools.repeat(special_tokens), itertools.repeat(infile),start_end_list))
+
+                for e in parallel_list:
+                    counts_by_pretoken.update(e)
+                    # chunk_counts += e
+                for pretoken in counts_by_pretoken.keys():
+                    tokens_by_pretoken[pretoken] = list(pretoken.encode("utf-8"))
+
+
 
 
     def get_counts_by_token_pair(tokens_by_pretoken:dict[str,list[int]], counts_by_pretoken:dict[str,int])->dict[tuple[int,int],int]:
@@ -134,7 +175,7 @@ def run_train_bpe(
         # this data structure should contain the key as the tuple of token0 and token 1 and the value as a tuple of the counts, and a list of pre tokens it belong to
         counts_by_tokenpair = incremental_counts_by_token_pair
         best_count = -1
-        best_token_pair = None
+        best_token_pair = (-1,-1)
         best_byte_pair = None
         for tokenpair,freq in counts_by_tokenpair.items():
             if freq > best_count:
@@ -152,7 +193,7 @@ def run_train_bpe(
         # return (max_key,max_val)
 
     def apply_top_merge(token_pair:tuple[int,int]):
-        def apply_decrement(t0:int,t1:int,delta_index:int,deltas_set:tuple[tuple[int,int],int],pretoken_frequency:int,log_mesg:str):
+        def apply_decrement(t0:int,t1:int,delta_index:int,deltas_set:dict[tuple[int,int],int],pretoken_frequency:int,log_mesg:str):
             if ((t0, t1), delta_index) not in deltas_set:
                 logger.debug(f"Decrementing {((t0, t1), delta_index)} from {incremental_counts_by_token_pair.get((t0, t1),0)} by {pretoken_frequency}")
                 incremental_counts_by_token_pair[(t0, t1)] = incremental_counts_by_token_pair.get((t0, t1),
@@ -166,7 +207,7 @@ def run_train_bpe(
                 logger.debug(log_mesg)
             deltas_set.add(((t0, t1), delta_index))
 
-        def apply_increment(t0:int,t1:int,delta_index:int,deltas_set:tuple[tuple[int,int],int],log_mesg:str,pretoken_frequency:str,pretoken:str):
+        def apply_increment(t0:int,t1:int,delta_index:int,deltas_set:dict[tuple[int,int],int],log_mesg:str,pretoken_frequency:int,pretoken:str):
             if ((t0, t1), delta_index) not in deltas_set:
                 logger.debug(log_mesg)
                 logger.debug(f"Incrementing {((t0, t1), delta_index)} from {incremental_counts_by_token_pair.get((t0, t1), 0)} by {pretoken_frequency}")
@@ -239,7 +280,7 @@ def run_train_bpe(
             # decrementing pairs straddling only of the elements of token_pair
             # don't double count for decrements
             # this set is ((token0,token1),index)
-            deltas_set = set()
+            deltas_set:dict[tuple[int,int],int] = set()
             for insertion_index in insertion_indices:
                 # handle case where at very left
                 if insertion_index == 0:
@@ -364,8 +405,18 @@ def run_train_bpe(
                 logger.debug(f"Ending with vocab length {len(vocab)} . Aborting")
                 break
             i+=1
-    load_file(input_path)
+
+    # start_time = time.perf_counter()
+    # load_file(input_path)
+    # end_time = time.perf_counter()
+    # logger.info(f"Old load is {(end_time-start_time)}")
+    # start_time = time.perf_counter()
+    load_file_parallel(4,input_path,special_tokens)
+    # end_time = time.perf_counter()
+    # logger.info(f"New load is {(end_time - start_time)}")
+
     incremental_counts_by_token_pair = get_counts_by_token_pair(tokens_by_pretoken,counts_by_pretoken)
+
     logger.debug(f"Baseline: {incremental_counts_by_token_pair}")
     apply_merges()
     # if CHECK_INVARIANTS:
