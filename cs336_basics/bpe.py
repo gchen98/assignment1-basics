@@ -23,7 +23,7 @@ console_handler.setFormatter(formatter)
 logger.addHandler(console_handler)
 
 
-def get_pretoken_counts_worker(special_tokens: list[str], filename: str, start_end: tuple[int, int]) -> dict[str, int]:
+def get_pretoken_counts_worker(use_findall:bool,special_tokens: list[str], filename: str, start_end: tuple[int, int]) -> dict[str, int]:
     PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
     counts: dict[str, int] = Counter({})
     (start, end) = start_end
@@ -33,12 +33,19 @@ def get_pretoken_counts_worker(special_tokens: list[str], filename: str, start_e
         regex_pattern = "|".join(map(re.escape, special_tokens))
         # only taking the first 'document' for prototyping. when things are working, will generalize remaining code into a function and loop over elements
         file_content_docs = re.split(regex_pattern, chunk)
+
         for file_content in file_content_docs:
             # logger.debug(f"regex pattern is {regex_pattern} Filtered {file_content}")
-            pretoken_iter = re.finditer(PAT, file_content)
-            for pretoken in pretoken_iter:
-                pretoken_str = pretoken.group(0)
-                counts[pretoken_str] = counts.get(pretoken_str, 0) + 1
+            if use_findall:
+                match_list = re.findall(PAT,file_content)
+                for pretoken_str in match_list:
+
+                    counts[pretoken_str] = counts.get(pretoken_str, 0) + 1
+            else:
+                pretoken_iter = re.finditer(PAT, file_content)
+                for pretoken in pretoken_iter:
+                    pretoken_str = pretoken.group(0)
+                    counts[pretoken_str] = counts.get(pretoken_str, 0) + 1
     return counts
 
 def run_train_bpe(
@@ -136,7 +143,7 @@ def run_train_bpe(
 
 
 
-    def load_file_parallel(num_processes:int,infile: str | os.PathLike,special_tokens:list[str]):
+    def load_file_parallel(use_find_all:bool,num_processes:int,infile: str | os.PathLike,special_tokens:list[str]):
         split_bytes = "|".join(map(re.escape, special_tokens)).encode("utf-8")
         # chunk_counts = Counter({})
         # token_lists = {}
@@ -147,7 +154,7 @@ def run_train_bpe(
             logger.debug(f"Boundaries are {start_end_list}")
             with ProcessPoolExecutor() as executor:
                 # executor.map applies the function to each element in parallel
-                parallel_list = list(executor.map(get_pretoken_counts_worker, itertools.repeat(special_tokens), itertools.repeat(infile),start_end_list))
+                parallel_list = list(executor.map(get_pretoken_counts_worker, itertools.repeat(use_find_all),itertools.repeat(special_tokens), itertools.repeat(infile),start_end_list))
 
                 for e in parallel_list:
                     counts_by_pretoken.update(e)
@@ -392,6 +399,8 @@ def run_train_bpe(
 
     def apply_merges()->tuple[dict[int,bytes],list[tuple[int,int]]]:
         i = 0
+        status_interval = 500
+        start_time = time.perf_counter()
         while True:
             (token_pair,freq)= get_top_token_pair()
             if freq>0:
@@ -404,21 +413,39 @@ def run_train_bpe(
             if len(vocab)>=MAX_TOKENS :
                 logger.debug(f"Ending with vocab length {len(vocab)} . Aborting")
                 break
+            if i%status_interval==0:
+                end_time = time.perf_counter()
+                logger.info(f"{i} merges completed with time {end_time-start_time}.")
+                start_time = end_time
+
             i+=1
 
     # start_time = time.perf_counter()
-    # load_file(input_path)
+    #load_file(input_path)
+
     # end_time = time.perf_counter()
     # logger.info(f"Old load is {(end_time-start_time)}")
-    # start_time = time.perf_counter()
-    load_file_parallel(4,input_path,special_tokens)
-    # end_time = time.perf_counter()
-    # logger.info(f"New load is {(end_time - start_time)}")
+    start_time = time.perf_counter()
+    workers = 4
+    # counts_by_pretoken.clear()
+    # load_file_parallel(False,workers,input_path,special_tokens)
+    # oldcounts = counts_by_pretoken.copy()
+    # #print(oldcounts)
+    # counts_by_pretoken.clear()
+    load_file_parallel(True, workers, input_path, special_tokens)
+    # newcounts = counts_by_pretoken.copy()
+    #print(newcounts)
+    # assert(newcounts==oldcounts)
+    end_time = time.perf_counter()
+    logger.info(f"Parallel load time at {workers} workers is {(end_time - start_time)}")
 
     incremental_counts_by_token_pair = get_counts_by_token_pair(tokens_by_pretoken,counts_by_pretoken)
-
+    end_time2 = time.perf_counter()
+    logger.info(f"Initializing invariants table time is {(end_time2 - end_time)}")
     logger.debug(f"Baseline: {incremental_counts_by_token_pair}")
     apply_merges()
+    end_time3 = time.perf_counter()
+    logger.info(f"Applying merges time is {(end_time3 - end_time)}")
     # if CHECK_INVARIANTS:
     #     logger.debug(f"Checking incremental vs gold standard")
     #     counts_by_token_pair_oracle = get_counts_by_token_pair(tokens_by_pretoken,counts_by_pretoken)
