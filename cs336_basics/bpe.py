@@ -37,8 +37,27 @@ class HeapElement:
     def __repr__(self):
         return f"Token pair  {self.token_pair} counts {self.counts} bytes pair {self.bytes_pair} is stale? {self.stale}"
 
-def get_pretoken_counts_worker(use_findall:bool,special_tokens: list[str], filename: str, start_end: tuple[int, int]) -> dict[str, int]:
-    PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
+def get_pretokens(full_string:str,special_tokens:list[str]|None)->list[str]:
+    pretokens:list[str] = []
+    pretoken_pattern = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
+    if special_tokens is not None:
+        special_tokens = sorted(special_tokens, key=lambda k: len(k), reverse=True)
+        logger.debug("Special tokens are: %s", special_tokens)
+        regex_pattern = "(" + "|".join(map(re.escape, special_tokens)) + ")"
+        # logger.debug(regex_pattern)
+        partitions = re.split(regex_pattern, full_string)
+        logger.debug("Partitions are %s",partitions)
+        for partition in partitions:
+            if partition in special_tokens:
+                pretokens.append(partition)
+            else:
+                pretokens.extend(re.findall(pretoken_pattern, partition))
+    else:
+        pretokens.extend(re.findall(pretoken_pattern,full_string))
+    logger.debug("Pretokens are %s",pretokens)
+    return pretokens
+
+def get_pretoken_counts_worker(special_tokens: list[str], filename: str, start_end: tuple[int, int]) -> dict[str, int]:
     counts: dict[str, int] = Counter({})
     (start, end) = start_end
     with open(filename, 'rb') as f:
@@ -47,19 +66,11 @@ def get_pretoken_counts_worker(use_findall:bool,special_tokens: list[str], filen
         regex_pattern = "|".join(map(re.escape, special_tokens))
         # only taking the first 'document' for prototyping. when things are working, will generalize remaining code into a function and loop over elements
         file_content_docs = re.split(regex_pattern, chunk)
-
         for file_content in file_content_docs:
             # logger.debug("regex pattern is {regex_pattern} Filtered {file_content}")
-            if use_findall:
-                match_list = re.findall(PAT,file_content)
-                for pretoken_str in match_list:
-
-                    counts[pretoken_str] = counts.get(pretoken_str, 0) + 1
-            else:
-                pretoken_iter = re.finditer(PAT, file_content)
-                for pretoken in pretoken_iter:
-                    pretoken_str = pretoken.group(0)
-                    counts[pretoken_str] = counts.get(pretoken_str, 0) + 1
+            match_list = get_pretokens(file_content)
+            for pretoken_str in match_list:
+                counts[pretoken_str] = counts.get(pretoken_str, 0) + 1
     return counts
 
 def run_train_bpe(
@@ -88,7 +99,7 @@ def run_train_bpe(
             merges:
                 BPE merges. Each list item is a tuple of bytes (<token1>, <token2>),
                 representing that <token1> was merged with <token2>.
-                Merges are ordered by order of creationprint(.
+                Merges are ordered by order of creationprint.
     """
 
     CHECK_INVARIANTS = False
@@ -102,7 +113,7 @@ def run_train_bpe(
     special_tokens =sorted(special_tokens,key=lambda k:len(k),reverse=True)
     logger.debug("Special tokens are: %s",special_tokens)
 
-    PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
+    pretoken_pattern = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
     # phase 1: tally counts of each pre-token into a dict where the key is a tokens
     # should be generalized to a Unicode code point
 
@@ -156,7 +167,7 @@ def run_train_bpe(
             file_content_docs = re.split(regex_pattern,file_content)
             for file_content in file_content_docs:
                 #logger.debug("regex pattern is {regex_pattern} Filtered {file_content}")
-                pretoken_iter = re.finditer(PAT, file_content)
+                pretoken_iter = re.finditer(pretoken_pattern, file_content)
                 for pretoken in pretoken_iter:
                     pretoken_str = pretoken.group(0)
                     counts_by_pretoken[pretoken_str] = counts_by_pretoken.get(pretoken_str, 0) + 1
@@ -165,8 +176,8 @@ def run_train_bpe(
 
 
 
-    def load_file_parallel(use_find_all:bool,num_processes:int,infile: str | os.PathLike,special_tokens:list[str]):
-        split_bytes = "|".join(map(re.escape, special_tokens)).encode("utf-8")
+    def load_file_parallel(use_find_all:bool,num_processes:int,infile: str | os.PathLike):
+        # split_bytes = "|".join(map(re.escape, special_tokens)).encode("utf-8")
         # chunk_counts = Counter({})
         # token_lists = {}
         document_delimiter = "<|endoftext|>".encode("utf-8")
@@ -176,7 +187,7 @@ def run_train_bpe(
             logger.debug("Boundaries are %s",start_end_list)
             with ProcessPoolExecutor() as executor:
                 # executor.map applies the function to each element in parallel
-                parallel_list = list(executor.map(get_pretoken_counts_worker, itertools.repeat(use_find_all),itertools.repeat(special_tokens), itertools.repeat(infile),start_end_list))
+                parallel_list = list(executor.map(get_pretoken_counts_worker, itertools.repeat(special_tokens), itertools.repeat(infile),start_end_list))
 
                 for e in parallel_list:
                     counts_by_pretoken.update(e)
@@ -187,7 +198,8 @@ def run_train_bpe(
 
 
 
-    def get_counts_by_token_pair(tokens_by_pretoken:dict[str,list[int]], counts_by_pretoken:dict[str,int])->dict[tuple[int,int],int]:
+
+    def get_counts_by_token_pair() ->dict[tuple[int, int], int]:
         counts_by_tokenpair = {}
         for pretoken in tokens_by_pretoken.keys():
             pretoken_freq = counts_by_pretoken[pretoken]
@@ -197,7 +209,6 @@ def run_train_bpe(
                 counts_by_tokenpair[(token0,token1)] = counts
                 pretokens_by_token_pair[(token0,token1)] =pretokens_by_token_pair.get((token0,token1),set())
                 pretokens_by_token_pair[(token0, token1)].add(pretoken)
-
         if not token_pair_heap:
             for (token_pair,counts) in counts_by_tokenpair.items():
                 add_to_heap(token_pair, counts)
@@ -236,7 +247,7 @@ def run_train_bpe(
         if CHECK_HEAP:
             logger.debug(f"Candidate {candidate} Candidate2 {candidate2}")
             assert(candidate==(candidate2.token_pair,candidate2.counts))
-        return (candidate2.token_pair,candidate2.counts)
+        return candidate2.token_pair,candidate2.counts
         # return (max_key,max_val)
 
     def add_to_heap(token_pair:tuple[int,int],new_count):
@@ -265,61 +276,58 @@ def run_train_bpe(
         add_to_heap(token_pair,new_count)
 
 
-    def apply_top_merge(token_pair:tuple[int,int]):
+    def apply_top_merge(top_pair:tuple[int,int]):
         pairs_updated = set()
 
-        def apply_decrement(t0:int,t1:int,delta_index:int,deltas_set:set[tuple[int,int],int],pretoken_frequency:int,log_mesg:str):
-            if ((t0, t1), delta_index) not in deltas_set:
-                logger.debug("Decrementing %s from %d by %d",((t0, t1), delta_index),incremental_counts_by_token_pair.get((t0, t1),0),pretoken_frequency)
-                new_count = incremental_counts_by_token_pair.get((t0, t1),0) - pretoken_frequency
-                incremental_counts_by_token_pair[(t0, t1)] = new_count
-                # update_heap((t0,t1),new_count)
-                pairs_updated.add((t0,t1))
-                if incremental_counts_by_token_pair[(t0, t1)] == 0:
-                    logger.debug("Token pair %s went to zero so removing",(t0,t1))
-                    del incremental_counts_by_token_pair[(t0, t1)]
-                    remove_from_heap((t0,t1))
-                    if (t0,t1) in pretokens_by_token_pair:
-                        del pretokens_by_token_pair[(t0, t1)]
+        def apply_decrement(adj_pair:tuple[int,int],delta_index:int,deltas_set:set[tuple[int,int],int],pretoken_frequency:int,log_mesg:str):
+            if (adj_pair, delta_index) not in deltas_set:
+                logger.debug("Decrementing %s from %d by %d",(adj_pair, delta_index),incremental_counts_by_token_pair.get(adj_pair,0),pretoken_frequency)
+                new_count = incremental_counts_by_token_pair.get(adj_pair,0) - pretoken_frequency
+                incremental_counts_by_token_pair[adj_pair] = new_count
+                # update_heap(adj_pair,new_count)
+                pairs_updated.add(adj_pair)
+                if incremental_counts_by_token_pair[adj_pair] == 0:
+                    logger.debug("Token pair %s went to zero so removing",adj_pair)
+                    del incremental_counts_by_token_pair[adj_pair]
+                    remove_from_heap(adj_pair)
+                    if adj_pair in pretokens_by_token_pair:
+                        del pretokens_by_token_pair[adj_pair]
             else:
                 logger.debug(log_mesg)
-            deltas_set.add(((t0, t1), delta_index))
+            deltas_set.add((adj_pair, delta_index))
 
-        def apply_increment(t0:int,t1:int,log_mesg:str,pretoken_frequency:int,pretoken:str,delta_index:int,deltas_set:set[tuple[int,int],int]):
-            if ((t0, t1), delta_index) not in deltas_set:
-                logger.debug("Incrementing %s with number %d by %d",(t0, t1),incremental_counts_by_token_pair.get((t0, t1), 0),pretoken_frequency)
-                new_count = incremental_counts_by_token_pair.get((t0, t1),0) + pretoken_frequency
-                incremental_counts_by_token_pair[(t0, t1)] = new_count
-                # update_heap((t0,t1),new_count)
-                pairs_updated.add((t0, t1))
-                pretokens_by_token_pair[(t0,t1)] = pretokens_by_token_pair.get((t0,t1),set())
-                pretokens_by_token_pair[(t0,t1)].add(pretoken)
+        def apply_increment(adj_pair:tuple[int,int],log_mesg:str,pretoken_frequency:int,pretoken:str,delta_index:int,deltas_set:set[tuple[int,int],int]):
+            if (adj_pair, delta_index) not in deltas_set:
+                logger.debug("Incrementing %s with number %d by %d",adj_pair,incremental_counts_by_token_pair.get(adj_pair, 0),pretoken_frequency)
+                new_count = incremental_counts_by_token_pair.get(adj_pair,0) + pretoken_frequency
+                incremental_counts_by_token_pair[adj_pair] = new_count
+                # update_heap(adj_pair,new_count)
+                pairs_updated.add(adj_pair)
+                pretokens_by_token_pair[adj_pair] = pretokens_by_token_pair.get(adj_pair,set())
+                pretokens_by_token_pair[adj_pair].add(pretoken)
             else:
                 logger.debug(log_mesg)
-            deltas_set.add(((t0, t1), delta_index))
-
-
-
+            deltas_set.add((adj_pair, delta_index))
         new_token_id = len(vocab)
         # the byte string concatenation
-        vocab[new_token_id] = vocab[token_pair[0]] + vocab[token_pair[1]]
+        vocab[new_token_id] = vocab[top_pair[0]] + vocab[top_pair[1]]
         # pretokens_eligible = 0
 
-        pretoken_set = pretokens_by_token_pair[(token_pair[0],token_pair[1])]
+        pretoken_set = pretokens_by_token_pair[top_pair]
         assert(len(pretoken_set)>0)
         for pretoken in pretoken_set:
             token_ints = tokens_by_pretoken[pretoken]
             pretoken_frequency = counts_by_pretoken[pretoken]
 
             logger.debug("Pretoken %s with frequency %d token_ints %s",pretoken,pretoken_frequency,token_ints)
-            logger.debug("Looking for token pair %d %d",token_pair[0],token_pair[1])
+            logger.debug("Looking for token pair %s",top_pair)
             # token_int_len = len(token_ints)
             insertion_indices = []
 
             # first sweep through and gather the indices that would need insertions of the new token id
             counter = 0
             for (token_int0, token_int1) in itertools.pairwise(token_ints):
-                if token_int0 == token_pair[0] and token_int1 == token_pair[1]:
+                if token_int0 == top_pair[0] and token_int1 == top_pair[1]:
                     insertion_indices.append(counter)
                 counter += 1
             token_int_len = counter + 1
@@ -345,23 +353,23 @@ def run_train_bpe(
                         # assert(False)
             if delta ==1:
                 insertion_indices_testing = insertion_indices.copy()
-                if CHECK_PRUNE_LIST:
-                    insertion_indices_pruned = []
-                    insertion_indices_pruned.append(insertion_indices[0])
-
-                    anchor_value = insertion_indices[0]
-                    anchor_idx = 0
-                    for walker in range( insertion_indices_len-1):
-                        logger.debug("Looking from %d to %d",anchor_idx+1,insertion_indices_len)
-                        target_idx = walker+1
-                        while target_idx< insertion_indices_len:
-                            if (insertion_indices[target_idx] - insertion_indices[anchor_idx]) > 1:
-                                insertion_indices_pruned.append(insertion_indices[target_idx])
-                                anchor_idx = target_idx
-                            target_idx+=1
-                    logger.debug("Insertion indices_len %d counter %d old insertion indices %s new insertion indices %s",insertion_indices_len,counter,insertion_indices,insertion_indices_pruned)
-                    insertion_indices = insertion_indices_pruned
-                    insertion_indices_len = len(insertion_indices_pruned)
+                # if CHECK_PRUNE_LIST:
+                #     insertion_indices_pruned = []
+                #     insertion_indices_pruned.append(insertion_indices[0])
+                #
+                #     anchor_value = insertion_indices[0]
+                #     anchor_idx = 0
+                #     for walker in range( insertion_indices_len-1):
+                #         logger.debug("Looking from %d to %d",anchor_idx+1,insertion_indices_len)
+                #         target_idx = walker+1
+                #         while target_idx< insertion_indices_len:
+                #             if (insertion_indices[target_idx] - insertion_indices[anchor_idx]) > 1:
+                #                 insertion_indices_pruned.append(insertion_indices[target_idx])
+                #                 anchor_idx = target_idx
+                #             target_idx+=1
+                #     logger.debug("Insertion indices_len %d counter %d old insertion indices %s new insertion indices %s",insertion_indices_len,counter,insertion_indices,insertion_indices_pruned)
+                #     insertion_indices = insertion_indices_pruned
+                #     insertion_indices_len = len(insertion_indices_pruned)
 
                 prune_list = []
                 pruned = False
@@ -374,8 +382,8 @@ def run_train_bpe(
                         pruned = False
                 for prune_index in reversed(prune_list):
                     del insertion_indices_testing[prune_index]
-                if CHECK_PRUNE_LIST:
-                    assert(insertion_indices_pruned==insertion_indices_testing)
+                # if CHECK_PRUNE_LIST:
+                #     assert(insertion_indices_pruned==insertion_indices_testing)
                 insertion_indices = insertion_indices_testing
                 insertion_indices_len = len(insertion_indices_testing)
 
@@ -389,30 +397,30 @@ def run_train_bpe(
                 # handle case where at very left
                 if insertion_index == 0:
                     if token_int_len > 2:
-                        t0, t1 =  token_ints[insertion_index + 1], token_ints[insertion_index + 2]
+                        adj_pair =  (token_ints[insertion_index + 1], token_ints[insertion_index + 2])
                         delta_index =insertion_index + 1
                         log_mesg = f"edge case at index {delta_index} with right neighbor was already decremented"
-                        apply_decrement(t0, t1, delta_index, deltas_set, pretoken_frequency, log_mesg)
+                        apply_decrement(adj_pair, delta_index, deltas_set, pretoken_frequency, log_mesg)
                 elif insertion_index == (token_int_len - 2):
                     # at very right
                     if token_int_len > 2:
-                        t0, t1 = token_ints[insertion_index -1], token_ints[insertion_index ]
+                        adj_pair = (token_ints[insertion_index -1], token_ints[insertion_index ])
                         delta_index = insertion_index - 1
                         log_mesg = f"edge case at index {delta_index} with left neighbor was already decremented"
-                        apply_decrement(t0, t1, delta_index, deltas_set, pretoken_frequency, log_mesg)
+                        apply_decrement(adj_pair, delta_index, deltas_set, pretoken_frequency, log_mesg)
                 # in the moddle
                 else:
                     if token_int_len > 3:
                         # something is flanking on left
-                        t0, t1 = token_ints[insertion_index - 1], token_ints[insertion_index]
+                        adj_pair = (token_ints[insertion_index - 1], token_ints[insertion_index])
                         delta_index = insertion_index - 1
                         log_mesg = f"edge case at index {delta_index} with flanking neighbors was already decremented"
-                        apply_decrement(t0, t1, delta_index, deltas_set, pretoken_frequency, log_mesg)
+                        apply_decrement(adj_pair, delta_index, deltas_set, pretoken_frequency, log_mesg)
                         # something is flanking on right
-                        t0, t1 = token_ints[insertion_index +1], token_ints[insertion_index+2]
+                        adj_pair = (token_ints[insertion_index +1], token_ints[insertion_index+2])
                         delta_index = insertion_index + 1
                         log_mesg = f"edge case at index {delta_index} with flanking neighbors was already decremented"
-                        apply_decrement(t0, t1, delta_index, deltas_set, pretoken_frequency, log_mesg)
+                        apply_decrement(adj_pair, delta_index, deltas_set, pretoken_frequency, log_mesg)
                 # logger.debug("Decrement set {deltas_set}")
 
             new_list2 = token_ints.copy()
@@ -432,49 +440,45 @@ def run_train_bpe(
                     # handle case where at very left
                     if counter == 0:
                         if token_int_len > 1:
-                            t0, t1 =  new_list2[counter], new_list2[counter + 1]
+                            adj_pair =  (new_list2[counter], new_list2[counter + 1])
                             delta_index = counter
                             log_mesg = f"edge case at index {delta_index} with right neighbor was already incremented"
-                            apply_increment(t0,t1,log_mesg,pretoken_frequency,pretoken,delta_index,deltas_set)
+                            apply_increment(adj_pair,log_mesg,pretoken_frequency,pretoken,delta_index,deltas_set)
                     elif counter == (token_int_len - 1):
                         # at very right
                         if token_int_len > 1:
-                            t0, t1 = new_list2[counter-1], new_list2[counter]
+                            adj_pair = (new_list2[counter-1], new_list2[counter])
                             delta_index = counter-1
                             log_mesg = f"edge case at index {delta_index} with left neighbor was already incremented"
-                            apply_increment(t0,t1,log_mesg,pretoken_frequency,pretoken,delta_index,deltas_set)
-                            # if ((t0, t1), (counter - 1)) not in deltas_set:
-                            #     # logger.debug("At very right, incrementing left neighbor {(t0, t1)} at by {pretoken_frequency}")
-                            #     incremental_counts_by_token_pair[(t0, t1)] = incremental_counts_by_token_pair.get((t0, t1),0) + pretoken_frequency
-                            # deltas_set.add(((t0, t1), counter-1))
-                    # in the moddle
+                            apply_increment(adj_pair,log_mesg,pretoken_frequency,pretoken,delta_index,deltas_set)
+                    # in the middle
                     else:
                         if token_int_len > 2:
                             # something is flanking on left
-                            t0, t1 = new_list2[counter - 1], new_list2[counter]
+                            adj_pair = (new_list2[counter - 1], new_list2[counter])
                             delta_index = counter-1
                             log_mesg = f"edge case at index {delta_index} with flanking neighbors was already incremented"
-                            apply_increment(t0,t1,log_mesg,pretoken_frequency,pretoken,delta_index,deltas_set)
+                            apply_increment(adj_pair,log_mesg,pretoken_frequency,pretoken,delta_index,deltas_set)
                             # something is flanking on right
-                            t0, t1 = new_list2[counter ], new_list2[counter+1]
+                            adj_pair = (new_list2[counter ], new_list2[counter+1])
                             delta_index = counter
                             log_mesg = f"edge case at index {delta_index} with flanking neighbors was already incremented"
-                            apply_increment(t0,t1,log_mesg,pretoken_frequency,pretoken,delta_index,deltas_set)
+                            apply_increment(adj_pair,log_mesg,pretoken_frequency,pretoken,delta_index,deltas_set)
             # decrementing all obsoleted pairs
-            logger.debug("Insertion indices len is %d and token pair is %s",insertion_indices_len,(token_pair[0], token_pair[1]))
-            if insertion_indices_len> 0 and (token_pair[0], token_pair[1]) in incremental_counts_by_token_pair :
+            logger.debug("Insertion indices len is %d and token pair is %s",insertion_indices_len,(top_pair[0], top_pair[1]))
+            if insertion_indices_len> 0 and top_pair in incremental_counts_by_token_pair :
                 count_to_remove = insertion_indices_len * pretoken_frequency
-                logger.debug("Decrementing pair %s from %d by %d",token_pair,incremental_counts_by_token_pair[(token_pair[0], token_pair[1])],count_to_remove)
-                incremental_counts_by_token_pair[(token_pair[0], token_pair[1])] -= count_to_remove
-                # update_heap((token_pair[0],token_pair[1]),incremental_counts_by_token_pair[(token_pair[0], token_pair[1])])
-                pairs_updated.add((token_pair[0],token_pair[1]))
-                assert (incremental_counts_by_token_pair[(token_pair[0], token_pair[1])] >= 0)
-                if incremental_counts_by_token_pair[(token_pair[0], token_pair[1])] == 0:
-                    # logger.debug("HOORAY {(token_pair[0], token_pair[1])} WENT TO ZERO")
-                    del incremental_counts_by_token_pair[(token_pair[0], token_pair[1])]
-                    # remove_from_heap((token_pair[0],token_pair[1]))
-                    if (token_pair[0],token_pair[1]) in pretokens_by_token_pair:
-                        del pretokens_by_token_pair[(token_pair[0],token_pair[1])]
+                logger.debug("Decrementing pair %s from %d by %d",top_pair,incremental_counts_by_token_pair[(top_pair[0], top_pair[1])],count_to_remove)
+                incremental_counts_by_token_pair[top_pair] -= count_to_remove
+                # update_heap((top_pair[0],top_pair[1]),incremental_counts_by_token_pair[(top_pair[0], top_pair[1])])
+                pairs_updated.add(top_pair)
+                assert (incremental_counts_by_token_pair[top_pair] >= 0)
+                if incremental_counts_by_token_pair[top_pair] == 0:
+                    # logger.debug("HOORAY {(top_pair[0], top_pair[1])} WENT TO ZERO")
+                    del incremental_counts_by_token_pair[top_pair]
+                    # remove_from_heap((top_pair[0],top_pair[1]))
+                    if (top_pair) in pretokens_by_token_pair:
+                        del pretokens_by_token_pair[top_pair]
 
         # update the heap only once!
         logger.debug("Number of pairs to update is %d",len(pairs_updated))
@@ -523,7 +527,8 @@ def run_train_bpe(
                 apply_top_merge(token_pair)
                 if CHECK_INVARIANTS:
                     logger.debug("Checking incremental vs gold standard")
-                    counts_by_token_pair_oracle = get_counts_by_token_pair(tokens_by_pretoken, counts_by_pretoken)
+                    # counts_by_token_pair_oracle = get_counts_by_token_pair(tokens_by_pretoken, counts_by_pretoken)
+                    counts_by_token_pair_oracle = get_counts_by_token_pair()
                     if incremental_counts_by_token_pair != counts_by_token_pair_oracle:
                         debug_dicts(incremental_counts_by_token_pair, counts_by_token_pair_oracle)
                     assert (counts_by_token_pair_oracle == incremental_counts_by_token_pair)
@@ -549,18 +554,19 @@ def run_train_bpe(
     start_time = time.perf_counter()
     #workers = 4
     # counts_by_pretoken.clear()
-    # load_file_parallel(False,workers,input_path,special_tokens)
+    # load_file_parallel(False,workers,input_path)
     # oldcounts = counts_by_pretoken.copy()
     # #print(oldcounts)
     # counts_by_pretoken.clear()
-    load_file_parallel(True, workers, input_path, special_tokens)
+    load_file_parallel(True, workers, input_path)
     # newcounts = counts_by_pretoken.copy()
     #print(newcounts)
     # assert(newcounts==oldcounts)
     end_time = time.perf_counter()
     logger.info(f"Parallel load time at {workers} workers is {(end_time - start_time)}")
 
-    incremental_counts_by_token_pair = get_counts_by_token_pair(tokens_by_pretoken,counts_by_pretoken)
+    # incremental_counts_by_token_pair = get_counts_by_token_pair(tokens_by_pretoken,counts_by_pretoken)
+    incremental_counts_by_token_pair = get_counts_by_token_pair()
     end_time2 = time.perf_counter()
     logger.info(f"Initializing invariants table time is {(end_time2 - end_time)}")
     logger.debug("Baseline: {incremental_counts_by_token_pair}")
@@ -569,8 +575,9 @@ def run_train_bpe(
     logger.info(f"Applying merges time is {(end_time3 - end_time)}")
     if CHECK_INVARIANTS:
         logger.debug("Checking incremental vs gold standard")
-        counts_by_token_pair_oracle = get_counts_by_token_pair(tokens_by_pretoken,counts_by_pretoken)
+        # counts_by_token_pair_oracle = get_counts_by_token_pair(tokens_by_pretoken,counts_by_pretoken)
+        counts_by_token_pair_oracle = get_counts_by_token_pair()
         if incremental_counts_by_token_pair != counts_by_token_pair_oracle:
             debug_dicts(incremental_counts_by_token_pair, counts_by_token_pair_oracle)
         assert(counts_by_token_pair_oracle==incremental_counts_by_token_pair)
-    return (vocab,merges)
+    return vocab,merges

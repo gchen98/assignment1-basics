@@ -12,6 +12,7 @@ from jaxtyping import Bool, Float, Int
 from torch import Tensor
 
 from cs336_basics import bpe
+from cs336_basics.tokenizer import Tokenizer
 
 ord('A')
 def run_linear(
@@ -40,7 +41,7 @@ def run_embedding(
     vocab_size: int,
     d_model: int,
     weights: Float[Tensor, " vocab_size d_model"],
-    token_ids: Int[Tensor, " ..."],
+    token_ids: Int[Tensor, "..."],
 ) -> Float[Tensor, " ... d_model"]:
     """
     Given the weights of an Embedding layer, get the embeddings for a batch of token ids.
@@ -365,7 +366,7 @@ def run_transformer_lm(
 def run_rmsnorm(
     d_model: int,
     eps: float,
-    weights: Float[Tensor, " d_model"],
+    weights: Float[Tensor, "d_model"],
     in_features: Float[Tensor, " ... d_model"],
 ) -> Float[Tensor, " ... d_model"]:
     """Given the weights of a RMSNorm affine transform,
@@ -385,7 +386,7 @@ def run_rmsnorm(
     raise NotImplementedError
 
 
-def run_silu(in_features: Float[Tensor, " ..."]) -> Float[Tensor, " ..."]:
+def run_silu(in_features: Float[Tensor, "..."]) -> Float[Tensor, "..."]:
     """Given a tensor of inputs, return the output of applying SiLU
     to each element.
 
@@ -422,7 +423,7 @@ def run_get_batch(
     raise NotImplementedError
 
 
-def run_softmax(in_features: Float[Tensor, " ..."], dim: int) -> Float[Tensor, " ..."]:
+def run_softmax(in_features: Float[Tensor, "..."], dim: int) -> Float[Tensor, "..."]:
     """
     Given a tensor of inputs, return the output of softmaxing the given `dim`
     of the input.
@@ -439,7 +440,7 @@ def run_softmax(in_features: Float[Tensor, " ..."], dim: int) -> Float[Tensor, "
 
 
 def run_cross_entropy(
-    inputs: Float[Tensor, " batch_size vocab_size"], targets: Int[Tensor, " batch_size"]
+    inputs: Float[Tensor, " batch_size vocab_size"], targets: Int[Tensor, "batch_size"]
 ) -> Float[Tensor, ""]:
     """Given a tensor of inputs and targets, compute the average cross-entropy
     loss across examples.
@@ -563,7 +564,11 @@ def get_tokenizer(
     Returns:
         A BPE tokenizer that uses the provided vocab, merges, and special tokens.
     """
-    raise NotImplementedError
+    # print("Creating a tokenizer")
+    return Tokenizer(vocab,merges,special_tokens)
+
+
+    # raise NotImplementedError
 
 def run_train_bpe(
     input_path: str | os.PathLike,
