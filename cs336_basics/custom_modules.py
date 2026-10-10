@@ -6,6 +6,10 @@ from einops import rearrange,einsum,repeat
 
 import logging
 
+# from cs336_basics.basic_building_blocks import in_embeddings
+
+# from cs336_basics.basic_building_blocks import d_model, d_ff, max_seq_len
+
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 # Create a console handler
@@ -28,7 +32,7 @@ class Linear(torch.nn.Module):
         self.dtype = dtype
 
     def forward(self,x:torch.Tensor)->torch.Tensor:
-        return einsum(self.weight,x,"d_out d_in,  ... d_in-> ... d_out")
+        return einsum(self.weight,x,"... d_out d_in,  ... d_in-> ... d_out")
 
 class Embedding(torch.nn.Module):
     def __init__(self,num_embeddings:int,embedding_dim:int,device=None,dtype=None):
@@ -74,17 +78,17 @@ class FFN(torch.nn.Module):
          else:
             self.d_ff = d_ff
          # print(f"Model size {self.d_model} and d_ff {self.d_ff}")
-         self.w1_x_model = Linear(self.d_model,self.d_ff)
-         # print(f"weights for self.w1_x_model is {self.w1_x_model.weight.shape}")
-         self.w3_x_model = Linear(self.d_model,self.d_ff)
-         self.swiglu_model = Linear(self.d_ff,self.d_model)
+         self.w1 = Linear(self.d_model,self.d_ff)
+         # print(f"weights for self.w1 is {self.w1.weight.shape}")
+         self.w3 = Linear(self.d_model,self.d_ff)
+         self.w2 = Linear(self.d_ff,self.d_model)
 
     def forward(self,in_features):
-        w1_x = self.w1_x_model(in_features)
+        w1_x = self.w1(in_features)
         silu_w1_x = w1_x * torch.sigmoid(w1_x)
-        w3_x = self.w3_x_model(in_features)
+        w3_x = self.w3(in_features)
         silu_w1_x_w3_x = silu_w1_x * w3_x
-        swiglu = self.swiglu_model(silu_w1_x_w3_x)
+        swiglu = self.w2(silu_w1_x_w3_x)
         return swiglu
 
 class RotaryPositionalEmbedding(torch.nn.Module):
@@ -205,12 +209,31 @@ class ScaledDotProductAttention(torch.nn.Module):
         return attn
 
 class MultiheadSelfAttention(torch.nn.Module):
-    def __init__(self,rope:RotaryPositionalEmbedding):
+    def __init__(self,rope:RotaryPositionalEmbedding, max_seq_len:int,d_model:int,num_heads:int,
+                 q_proj_weight: torch.Tensor, k_proj_weight: torch.Tensor,
+                 v_proj_weight: torch.Tensor, o_proj_weight: torch.Tensor):
         super().__init__()
         self.rope = rope
+        #self attention so these are the same
+        n = max_seq_len
+        m = max_seq_len
+        d_k = d_model
+        d_v = d_model
+        self.max_seq_len = max_seq_len
+        self.num_heads = num_heads
+        self.q_proj = Linear(num_heads * d_k,d_model)
+        self.q_proj.weight = torch.nn.Parameter(q_proj_weight)
+        self.k_proj = Linear(num_heads * d_k, d_model)
+        self.k_proj.weight = torch.nn.Parameter(k_proj_weight)
+        self.v_proj = Linear(num_heads * d_v, d_model)
+        self.v_proj.weight = torch.nn.Parameter(v_proj_weight)
+        self.output_proj = Linear(d_model, num_heads * d_model)
+        self.output_proj.weight = torch.nn.Parameter(o_proj_weight)
+        self.sdpa = ScaledDotProductAttention()
 
 
-    def forward(self,d_model:int,num_heads:int,max_seq_len:int,q_proj_weight:torch.Tensor,k_proj_weight:torch.Tensor,v_proj_weight:torch.Tensor,o_proj_weight:torch.Tensor,in_features:torch.Tensor,token_positions:torch.Tensor)->torch.Tensor:
+
+    def forward(self,in_features:torch.Tensor,token_positions:torch.Tensor)->torch.Tensor:
         """
         d_model (int): Dimensionality of the feedforward input and output.
         num_heads (int): Number of heads to use in multi-headed attention.
@@ -221,38 +244,76 @@ class MultiheadSelfAttention(torch.nn.Module):
         o_proj_weight (Float[Tensor, "d_model d_model"]): Weights for the output projection
         in_features (Float[Tensor, "... sequence_length d_model"]): Tensor to run your implementation on. )
         """
-        d_k = q_proj_weight.shape[-2]/num_heads
-        d_v = v_proj_weight.shape[-2]/num_heads
+        # d_k = q_proj_weight.shape[-2]/num_heads
+        # d_v = v_proj_weight.shape[-2]/num_heads
 
-        def get_sliced(weight: torch.Tensor, in_embeddings: torch.Tensor) -> tuple[torch.Tensor]:
-            project = einsum(weight, in_embeddings,
-                             "h_d_w embedding_dim,... seq_len embedding_dim -> ...  seq_len h_d_w")
-            print(f"project {project.shape}")
-            project_sliced = rearrange(project, '... seq_len (h d_w) -> ... h seq_len d_w ', h=num_heads)
-            print(f"project_sliced {project_sliced.shape}")
-            return project_sliced
-            # project_slices = project_sliced.unbind(dim=-3)
-            # print(f"slices {len(project_slices)}")
-            # for slice in project_slices:
-            #      print(f"slice {slice.shape}")
-            # return project_slices
+        # self.q_proj.weight = torch.nn.Parameter(q_proj_weight)
+        # logger.debug(f"q weight {q_proj_weight.shape} in features {in_features.shape}")
+        q_projection = self.q_proj(in_features)
+        # logger.debug(f"q project {q_projection.shape}")
+        q_slices = rearrange(q_projection, '... seq_len (h d_w) -> ... h seq_len d_w ', h=self.num_heads)
+        logger.debug(f"q slices {q_slices.shape}")
 
 
-        q_slices = get_sliced(q_proj_weight, in_features)
-        k_slices = get_sliced(k_proj_weight, in_features)
+        k_projection = self.k_proj(in_features)
+        k_slices = rearrange(k_projection, '... seq_len (h d_w) -> ... h seq_len d_w ', h=self.num_heads)
+
+        # q_slices = get_sliced(q_proj_weight, in_features)
+        # k_slices = get_sliced(k_proj_weight, in_features)
         if token_positions is not None:
             q_slices = self.rope(q_slices,token_positions)
             k_slices = self.rope(k_slices,token_positions)
-        v_slices = get_sliced(v_proj_weight, in_features)
 
-        from cs336_basics.custom_modules import ScaledDotProductAttention
-        sdpa = ScaledDotProductAttention()
-        mask = ~torch.triu(torch.ones(max_seq_len, max_seq_len), diagonal=1).bool()
-        multihead = sdpa(q_slices, k_slices, v_slices, mask)
+
+        v_projection = self.v_proj(in_features)
+        v_slices = rearrange(v_projection, '... seq_len (h d_w) -> ... h seq_len d_w ', h=self.num_heads)
+        # v_slices = get_sliced(v_proj_weight, in_features)
+
+        # from cs336_basics.custom_modules import ScaledDotProductAttention
+        # sdpa = ScaledDotProductAttention()
+        mask = ~torch.triu(torch.ones(self.max_seq_len, self.max_seq_len), diagonal=1).bool()
+        multihead = self.sdpa(q_slices, k_slices, v_slices, mask)
         # print(f"multihead {multihead.shape}")
-        merged_multihead = rearrange(multihead, "... heads seq_len d_w -> ... seq_len (heads d_w)", heads=num_heads)
-        # print(f"merged multihead {merged_multihead.shape}")
-        o_project = einsum(o_proj_weight, merged_multihead, "emb_dim h_d_v , ... h_d_v -> ... emb_dim ")
+        merged_multihead = rearrange(multihead, "... heads seq_len d_w -> ... seq_len (heads d_w)", heads=self.num_heads)
+        logger.debug(f"merged multihead {merged_multihead.shape}")
+        # o_project = einsum(o_proj_weight, merged_multihead, "emb_dim h_d_v , ... h_d_v -> ... emb_dim ")
+
+        o_projection = self.output_proj(merged_multihead)
+        # logger.debug(f"o project {o_projection.shape}")
         # print(f"o_project shape {o_project.shape}")
         # print(f"mask has nan? {torch.isnan(multihead).any()}")
+        return o_projection
         return o_project
+
+class TransformerBlock(torch.nn.Module):
+    def __init__(self,d_model,num_heads, d_ff, max_seq_len, theta, in_features):
+                 #
+                 # attn.q_proj.weight,attn.k_proj.weight):
+        super().__init__()
+        rope = RotaryPositionalEmbedding(theta,d_model,max_seq_len,None)
+        self.attn = MultiheadSelfAttention(rope)
+
+    # def __init__(self,d_model,num_heads, d_ff, max_seq_len, theta, in_features,attn.q_proj.weight,attn.k_proj.weight,attn.v_proj.weight,ffn.w2.weight,ffn.w3.weight,ln1.weight,ln2.weight):
+
+
+        # super().__init__()
+        # self.d_model = d_model
+        # self.num_heads = num_heads
+        # self.d_ff = d_ff
+        # self.max_seq_len = max_seq_len
+
+
+
+        # d_model 64 num_heads 4 d_ff 128 max_seq_len 16 theta 10000.0
+        # in features shape torch.Size([4, 12, 64])
+
+        # weight attn.q_proj.weight has shape torch.Size([64, 64])
+        # weight attn.k_proj.weight has shape torch.Size([64, 64])
+        # weight attn.v_proj.weight has shape torch.Size([64, 64])
+        # weight attn.output_proj.weight has shape torch.Size([64, 64])
+        # weight ffn.w1.weight has shape torch.Size([128, 64])
+        # weight ffn.w2.weight has shape torch.Size([64, 128])
+        # weight ffn.w3.weight has shape torch.Size([128, 64])
+        # weight ln1.weight has shape torch.Size([64])
+        # weight ln2.weight has shape torch.Size([64])
+
