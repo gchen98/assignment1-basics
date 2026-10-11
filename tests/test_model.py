@@ -55,6 +55,7 @@ def test_swiglu(numpy_snapshot, ts_state_dict, in_embeddings, d_model, d_ff):
 
 
 def test_scaled_dot_product_attention(numpy_snapshot, q, k, v, mask):
+    print(f"Shape of q is {q.shape} k is {k.shape} v is {v.shape} and mask is {mask.shape}")
     actual_output = run_scaled_dot_product_attention(Q=q, K=k, V=v, mask=mask)
     numpy_snapshot.assert_match(
         actual_output,
@@ -64,8 +65,11 @@ def test_scaled_dot_product_attention(numpy_snapshot, q, k, v, mask):
 
 def test_4d_scaled_dot_product_attention(numpy_snapshot, q, k, v, mask):
     # Shape: (batch_size, num_heads, seq_len, d_k)
+
     q, k, v = (rearrange(x, "(batch head) seq d -> batch head seq d", head=2) for x in (q, k, v))
     mask = rearrange(mask, "(batch head) query key -> batch head query key", head=2)
+
+    print(f"Shape of q is {q.shape} k is {k.shape} v is {v.shape} and mask is {mask.shape}")
 
     actual_output = run_scaled_dot_product_attention(Q=q, K=k, V=v, mask=mask)
     numpy_snapshot.assert_match(
@@ -79,6 +83,7 @@ def test_multihead_self_attention(numpy_snapshot, in_embeddings, d_model, n_head
     q_proj_weight, k_proj_weight, v_proj_weight, o_proj_weight = [
         d[f"layers.0.attn.{k}_proj.weight"] for k in ["q", "k", "v", "output"]
     ]
+    print(f"Shapes are in_embeddings {in_embeddings.shape} d_model {d_model} num_heads {n_heads} q {q_proj_weight.shape} k {k_proj_weight.shape} v {v_proj_weight.shape} o {o_proj_weight.shape}")
     actual_output = run_multihead_self_attention(
         d_model=d_model,
         num_heads=n_heads,
@@ -99,6 +104,7 @@ def test_multihead_self_attention_with_rope(
         d[f"layers.0.attn.{k}_proj.weight"] for k in ["q", "k", "v", "output"]
     ]
     pos_ids = rearrange(pos_ids, "seq -> 1 seq")
+
     actual_output = run_multihead_self_attention_with_rope(
         d_model=d_model,
         num_heads=n_heads,
