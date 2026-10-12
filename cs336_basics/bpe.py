@@ -534,7 +534,7 @@ def run_train_bpe(
                     assert (counts_by_token_pair_oracle == incremental_counts_by_token_pair)
 
             else:
-                logger.warning("Nothing was merged. Aborting")
+                loggerning("Nothing was merged. Aborting")
                 break
             if len(vocab)>=MAX_TOKENS :
                 logger.info("Ending with vocab length %d. Aborting",len(vocab))
