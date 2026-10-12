@@ -68,7 +68,7 @@ def get_pretoken_counts_worker(special_tokens: list[str], filename: str, start_e
         file_content_docs = re.split(regex_pattern, chunk)
         for file_content in file_content_docs:
             # logger.debug("regex pattern is {regex_pattern} Filtered {file_content}")
-            match_list = get_pretokens(file_content)
+            match_list = get_pretokens(file_content,special_tokens)
             for pretoken_str in match_list:
                 counts[pretoken_str] = counts.get(pretoken_str, 0) + 1
     return counts
@@ -537,7 +537,7 @@ def run_train_bpe(
                 logger.warning("Nothing was merged. Aborting")
                 break
             if len(vocab)>=MAX_TOKENS :
-                logger.warning("Ending with vocab length %d. Aborting",len(vocab))
+                logger.info("Ending with vocab length %d. Aborting",len(vocab))
                 break
             if counter%status_interval==0:
                 end_time = time.perf_counter()

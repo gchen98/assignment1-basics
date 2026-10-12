@@ -1,12 +1,7 @@
 import math
 import torch
 from einops import rearrange,einsum,repeat,reduce
-
-
-
 import logging
-
-
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -102,7 +97,7 @@ class RotaryPositionalEmbedding(torch.nn.Module):
         super().__init__()
         self.theta = theta # theta value for the RoPE
         self.d_k = d_k # dimension of query and key vectors
-        logger.debug(f"RoPE created with model size {d_k}")
+        # logger.debug(f"RoPE created with model size {d_k}")
         self.max_seq_len = max_seq_len # maximum sequence length that will be input
         # create a tensor that stores for each pair of positions along the embedding dimension
         # their appropriate rotation angles where each element
@@ -178,17 +173,70 @@ class Softmax(torch.nn.Module):
     def forward(self,in_features:torch.Tensor,dim:int)->torch.Tensor:
         # print(f"x is {x} with shape {x.shape}")
         # dim = -1
+        # logger.debug(f"in_features is {in_features} with shape {in_features.shape}")
         max = torch.max(in_features, dim, keepdim=True).values
-        # print(f"max is {max} with shape {max.shape}")
+        # logger.debug(f"max is {max} with shape {max.shape}")
         x_smaller = torch.subtract(in_features, max)
-        # print(f"x_smaller {x_smaller} with shape {x_smaller.shape}")
+        # logger.debug(f"x_smaller {x_smaller} with shape {x_smaller.shape}")
         x_exp = torch.exp(x_smaller)
-        # print(f"x_exp {x_exp} ")
+        # logger.debug(f"x_exp {x_exp} ")
         denom = torch.sum(x_exp, dim=-1, keepdim=True)
-        # print(f"denom {denom}")
+        # logger.debug(f"denom {denom}")
         softmax = x_exp / denom
-        # print(f"softmax {softmax}")
+        # logger.debug(f"softmax {softmax}")
         return softmax
+
+class LogSoftmax(torch.nn.Module):
+    """
+    Given a tensor of inputs, return the output of log softmaxing the given `dim`
+    of the input.
+
+    Args:
+        in_features (Float[Tensor, "..."]): Input features to softmax. Shape is arbitrary.
+        dim (int): Dimension of the `in_features` to apply softmax to.
+
+    Returns:
+        Float[Tensor, "..."]: Tensor of with the same shape as `in_features` with the output of
+        softmax normalizing the specified `dim`.
+    """
+    def __init__(self):
+        super().__init__()
+
+    def forward(self,in_features:torch.Tensor,dim:int)->torch.Tensor:
+        # print(f"x is {x} with shape {x.shape}")
+        # dim = -1
+        # logger.debug(f"in_features is {in_features} with shape {in_features.shape}")
+        max = torch.max(in_features, dim, keepdim=True).values
+        # logger.debug(f"max is {max} with shape {max.shape}")
+        x_smaller = torch.subtract(in_features, max)
+        # logger.debug(f"x_smaller {x_smaller} with shape {x_smaller.shape}")
+        x_exp = torch.exp(x_smaller)
+        # logger.debug(f"x_exp {x_exp} ")
+        denom = torch.sum(x_exp, dim=-1, keepdim=True)
+        # logger.debug(f"denom {denom}")
+        # softmax = x_exp / denom
+        log_softmax = x_smaller - torch.log(denom)
+        # logger.debug(f"softmax {softmax}")
+        return log_softmax
+
+
+class CrossEntropyLoss(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self,logits:torch.Tensor,targets:torch.Tensor)->torch.Tensor:
+        logits_v = logits.view(-1,logits.size(-1))
+        # logger.debug(f"logits_v is {logits_v}")
+        # do a log softmax rather than naive softmax
+        targets_v = targets.view(-1,1)
+        # logger.debug(f"targets_v is {targets_v}")
+
+        log_softmax = LogSoftmax()
+        log_smax = log_softmax(logits_v,dim=1)
+        # logger.debug(f"log_softmax is {log_smax}")
+        selected = log_smax.gather(1,targets_v)
+        loss = torch.mean(-selected)
+        return loss
 
 class ScaledDotProductAttention(torch.nn.Module):
     def __init__(self):
@@ -256,10 +304,10 @@ class MultiheadSelfAttention(torch.nn.Module):
         # self.q_proj.weight = torch.nn.Parameter(q_proj_weight)
 
         q_projection = self.q_proj(in_features)
-        logger.debug(f" in features {in_features.shape}")
-        logger.debug(f"q project {q_projection.shape}")
+        # logger.debug(f" in features {in_features.shape}")
+        # logger.debug(f"q project {q_projection.shape}")
         q_slices = rearrange(q_projection, '... seq_len (h d_w) -> ... h seq_len d_w ', h=self.num_heads)
-        logger.debug(f"q slices {q_slices.shape}")
+        # logger.debug(f"q slices {q_slices.shape}")
 
         k_projection = self.k_proj(in_features)
         k_slices = rearrange(k_projection, '... seq_len (h d_w) -> ... h seq_len d_w ', h=self.num_heads)
@@ -267,7 +315,7 @@ class MultiheadSelfAttention(torch.nn.Module):
         # q_slices = get_sliced(q_proj_weight, in_features)
         # k_slices = get_sliced(k_proj_weight, in_features)
         if token_positions is not None:
-            logger.debug(f"Debug q_slices is {q_slices.shape} and token_positions is {token_positions.shape}")
+            # logger.debug(f"Debug q_slices is {q_slices.shape} and token_positions is {token_positions.shape}")
             q_slices = self.rope(q_slices,token_positions)
             k_slices = self.rope(k_slices,token_positions)
 
@@ -279,14 +327,14 @@ class MultiheadSelfAttention(torch.nn.Module):
         # from cs336_basics.custom_modules import ScaledDotProductAttention
         # sdpa = ScaledDotProductAttention()
         seq_len = in_features.shape[-2]
-        logger.debug(f"In features seq len is {seq_len}")
+        # logger.debug(f"In features seq len is {seq_len}")
         mask = self.mask[:seq_len,:seq_len]
         # mask = ~torch.triu(torch.ones(seq_len, seq_len), diagonal=1).bool()
         # mask = ~torch.triu(torch.ones(self.max_seq_len, self.max_seq_len), diagonal=1).bool()
         multihead = self.sdpa(q_slices, k_slices, v_slices, mask)
         # print(f"multihead {multihead.shape}")
         merged_multihead = rearrange(multihead, "... heads seq_len d_w -> ... seq_len (heads d_w)", heads=self.num_heads)
-        logger.debug(f"merged multihead {merged_multihead.shape}")
+        # logger.debug(f"merged multihead {merged_multihead.shape}")
         # o_project = einsum(o_proj_weight, merged_multihead, "emb_dim h_d_v , ... h_d_v -> ... emb_dim ")
 
         o_projection = self.output_proj(merged_multihead)

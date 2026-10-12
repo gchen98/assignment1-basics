@@ -325,15 +325,15 @@ def run_transformer_block(
         Float[Tensor, "batch sequence_length d_model"] Tensor with the output of
         running the Transformer block on the input features while using RoPE.
     """
-    print(f"d_model {d_model} num_heads {num_heads} d_ff {d_ff} max_seq_len {max_seq_len} theta {theta}")
-    print(f"in features shape {in_features.shape}")
-    for k, v in weights.items():
-        print(f"weight {k} has shape {v.shape}")
+    # print(f"d_model {d_model} num_heads {num_heads} d_ff {d_ff} max_seq_len {max_seq_len} theta {theta}")
+    # print(f"in features shape {in_features.shape}")
+    # for k, v in weights.items():
+        # print(f"weight {k} has shape {v.shape}")
 
 
     transformer_block = custom_modules.TransformerBlock(d_model,num_heads,d_ff,max_seq_len,theta)
-    for k,v in transformer_block.state_dict().items():
-        print(f"key is {k} and value is {v}")
+    # for k,v in transformer_block.state_dict().items():
+        # print(f"key is {k} and value is {v}")
     transformer_block.load_state_dict(weights)
     # raise NotImplementedError
     return transformer_block(in_features)
@@ -534,7 +534,10 @@ def run_cross_entropy(
     Returns:
         Float[Tensor, ""]: The average cross-entropy loss across examples.
     """
-    raise NotImplementedError
+    cross_entropy_loss = custom_modules.CrossEntropyLoss()
+    return cross_entropy_loss(inputs,targets)
+    # raise NotImplementedError
+
 
 
 def run_gradient_clipping(parameters: Iterable[torch.nn.Parameter], max_l2_norm: float) -> None:
