@@ -1,6 +1,7 @@
 import math
 
-import numpy
+import os
+from typing import BinaryIO,IO
 import numpy as np
 import torch
 import logging
@@ -56,12 +57,12 @@ class AdamW(torch.optim.Optimizer):
         self.first_moments:dict[str,torch.Tensor] = {}
         self.second_moments:dict[str,torch.Tensor] = {}
         for group in self.param_groups:
-            logger.debug(f"group {group}")
+            # logger.debug(f"group {group}")
             self.first_moments
             for p in group["params"]:
-                logger.debug(f"parameter {p}")
+                # logger.debug(f"parameter {p}")
                 params_shape = p.shape
-                logger.debug(f"params shape is: {params_shape}")
+                # logger.debug(f"params shape is: {params_shape}")
                 self.first_moments[p] = torch.zeros(params_shape)
                 self.second_moments[p] = torch.zeros(params_shape)
         # assert(False)
@@ -148,6 +149,58 @@ def get_batch(dataset:np.array, batch_size:int, context_length: int, device:str)
     # target_v = torch.LongTensor(targets,device=device).view(batch_size, context_length)
     # logger.debug(f"Training v {training_v.shape}")
     return (training_v,target_v)
+
+def run_save_checkpoint(
+    model: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
+    iteration: int,
+    out: str | os.PathLike | BinaryIO | IO[bytes],
+):
+    """
+    Given a model, optimizer, and an iteration number, serialize them to disk.
+
+    Args:
+        model (torch.nn.Module): Serialize the state of this model.
+        optimizer (torch.optim.Optimizer): Serialize the state of this optimizer.
+        iteration (int): Serialize this value, which represents the number of training iterations
+            we've completed.
+        out (str | os.PathLike | BinaryIO | IO[bytes]): Path or file-like object to serialize the model, optimizer, and iteration to.
+    """
+    all_states:dict[str,dict] = {}
+    all_states["module"] = model.state_dict()
+    # logger.debug(f"model state dict is {model.state_dict()}")
+    all_states["optimizer"] = optimizer.state_dict()
+
+    all_states["primitives"] = {"iteration":iteration}
+    with open(out,"wb") as fout:
+        torch.save(all_states,fout)
+
+def run_load_checkpoint(
+    src: str | os.PathLike | BinaryIO | IO[bytes],
+    model: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
+) -> int:
+    """
+    Given a serialized checkpoint (path or file-like object), restore the
+    serialized state to the given model and optimizer.
+    Return the number of iterations that we previously serialized in
+    the checkpoint.
+
+    Args:
+        src (str | os.PathLike | BinaryIO | IO[bytes]): Path or file-like object to serialized checkpoint.
+        model (torch.nn.Module): Restore the state of this model.
+        optimizer (torch.optim.Optimizer): Restore the state of this optimizer.
+    Returns:
+        int: the previously-serialized number of iterations.
+    """
+    with open(src,"rb") as fin:
+        all_states = torch.load(fin)
+        model.load_state_dict(all_states["module"])
+        # logger.debug(f"model state dict is {all_states["module"]}")
+        optimizer.load_state_dict(all_states["optimizer"])
+        iteration = all_states["primitives"]["iteration"]
+        return iteration
+
 
 
 
