@@ -132,7 +132,7 @@ def get_batch(dataset:np.array, batch_size:int, context_length: int, device:str)
     """
 
     start_indices = torch.randint(low=0, high=(dataset.size - context_length), size=(batch_size,))
-    logger.debug(f"starts: {start_indices}")
+    # logger.debug(f"starts: {start_indices}")
     # dataset[start_indices,]
     training = []
     targets = []

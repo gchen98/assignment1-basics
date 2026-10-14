@@ -59,7 +59,7 @@ class RMSNorm(torch.nn.Module):
         # epsilon = 1e-5
         # x = torch.rand(10)
         in_dtype = x.dtype
-        # print(f"Input tensor is of shape {x.shape} model dim is {self.d_model}")
+        # logger.debug(f"Input tensor is of shape {x.shape} model dim is {self.d_model}")
         x2 = x ** 2
         ssq = reduce(x2, '... last -> ... 1', 'sum')
         rms = torch.sqrt(ssq / self.d_model + self.eps)
@@ -167,8 +167,9 @@ class Softmax(torch.nn.Module):
         Float[Tensor, "..."]: Tensor of with the same shape as `in_features` with the output of
         softmax normalizing the specified `dim`.
     """
-    def __init__(self):
+    def __init__(self,temperature:float = None):
         super().__init__()
+        self.temperature = temperature
 
     def forward(self,in_features:torch.Tensor,dim:int)->torch.Tensor:
         # print(f"x is {x} with shape {x.shape}")
@@ -177,6 +178,8 @@ class Softmax(torch.nn.Module):
         max = torch.max(in_features, dim, keepdim=True).values
         # logger.debug(f"max is {max} with shape {max.shape}")
         x_smaller = torch.subtract(in_features, max)
+        if self.temperature is not None:
+            x_smaller/=self.temperature
         # logger.debug(f"x_smaller {x_smaller} with shape {x_smaller.shape}")
         x_exp = torch.exp(x_smaller)
         # logger.debug(f"x_exp {x_exp} ")

@@ -1,0 +1,1 @@
+uv run python trainer.py --vocab_file "data/vocab_tinystories_sample_5M.txt" --dataset "data/TinyStoriesV2-GPT4-train.npy" --model_params "data/tinystories_config.yaml" --checkpoint_file "data/tinystories_checkpoint.pt" --steps 1000 --checkpoint_interval 10
