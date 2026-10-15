@@ -1,1 +1,1 @@
-uv run python generator.py --model_params "data/tinystories_config.yaml" --merges_filename "data/tinystories_merges.txt" --max_tokens_generated 200 --end_of_text "<|endoftext|>" --temperature 0.1 --softmax_nucleus_threshold 0.90
+uv run python generator.py --model_params "data/tinystories_config.yaml" --merges_filename "data/tinystories_merges.txt" --max_tokens_generated 200 --end_of_text "<|endoftext|>" --temperature 0.8 --softmax_nucleus_threshold 0.90

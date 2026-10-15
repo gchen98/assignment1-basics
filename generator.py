@@ -9,6 +9,7 @@ import torch
 
 from cs336_basics import io_utils,custom_modules,custom_training,tokenizer
 
+
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 # Create a console handler
@@ -20,6 +21,7 @@ console_handler.setFormatter(formatter)
 # Add the handler to your logger
 logger.addHandler(console_handler)
 
+@torch.no_grad
 def main():
     device = "cpu"
     parser = argparse.ArgumentParser(description="A language model generator")
@@ -46,7 +48,8 @@ def main():
 
 
     vocab_file = model_params['vocab_file']
-    checkpoint_file = model_params['checkpoint_file']
+    # checkpoint_file = model_params['checkpoint_file']
+    opt_checkpoint_file = model_params['opt_checkpoint_file']
     context_length = model_params['context_length']
     embedding_dim = model_params['embedding_dim']
     num_layers = model_params['num_layers']
@@ -77,8 +80,9 @@ def main():
                                                   )
 
     model = torch.compile(model)
+    model.eval()
 
-    cross_entropy_loss = custom_modules.CrossEntropyLoss()
+
 
     # create the optimizer
     optimizer = custom_training.AdamW(params=model.parameters(),lr=1e-3,
@@ -89,10 +93,10 @@ def main():
 
     t:int = 0
 
-    checkpoint_path = Path(checkpoint_file)
+    checkpoint_path = Path(opt_checkpoint_file)
     if checkpoint_path.is_file():
         t = custom_training.run_load_checkpoint(src=checkpoint_path,model=model,optimizer=optimizer)
-        logger.info(f"Loading checkpoint file {checkpoint_path} and starting at iteration {t}")
+        logger.info(f"Loading checkpoint file {checkpoint_path} at iteration {t}")
 
 
 
@@ -109,6 +113,8 @@ def main():
     def mask_weights(weights: torch.Tensor, softmax_nucleus_threshold: float = 1.0):
         values, indices = torch.sort(weights, descending=True)
         # logger.debug(f"sorted {values.shape} indices {indices.shape}")
+        cumsums = torch.cumsum(values, dim=-1)
+
         last_index = weights.shape[-1]
         i = 0
         sum = 0
@@ -116,7 +122,8 @@ def main():
         mask = torch.zeros(weights.shape, dtype=bool, requires_grad=False)
         while i < last_index:
             # logger.debug(f"values shape {values.shape}")
-            sum += values[i]
+            # sum += values[i]
+            sum = cumsums[i]
             # logger.debug(f"sum is {sum} at {i}")
             mask[indices[i]] = True
             if sum >= softmax_nucleus_threshold:
@@ -126,8 +133,23 @@ def main():
         weight_masked = torch.where(mask, weights, 0)
         return weight_masked
 
+    softmax_nucleus_threshold = args.softmax_nucleus_threshold
+
     while(True):
-        prompt = input("Enter your prompt:")
+        prompt = input("Enter your prompt (commands are /temperature /threshold):")
+        if len(prompt) > 1 and prompt[0] == '/':
+            # print(f"parsing")
+            command = prompt[1:]
+            if '=' in command:
+                k, v = command.split('=')
+                print(f"Command of {k} with value {v}")
+                if k == 'temperature':
+                    softmax = custom_modules.Softmax(temperature=float(float(v)))
+                    print(f"New temperature of {v} set for softmax")
+                elif k == 'threshold':
+                    softmax_nucleus_threshold = float(v)
+                    print(f"New threshold of {v} set for probability thresholding")
+            continue
         token_ids = tkn.encode(prompt)
         seq_len = min(context_length,len(token_ids))
         token_ids = token_ids[-seq_len:]
@@ -136,22 +158,23 @@ def main():
         tokens_generated = model_input[0].tolist()
         output = tkn.decode(tokens_generated)
         print(output,end="")
-
         token_iter = 0
         best_token = -1
-
         while best_token != end_of_text_id and token_iter < int(args.max_tokens_generated):
             # logger.debug(f"At iteration {token_iter}")
-
             # logger.debug(f"model_input {model_input}")
             model_output = model(model_input)
-            probs = softmax(in_features=model_output, dim=1)
+            # logger.debug(f"model output {model_output}")
+            probs = softmax(in_features=model_output, dim=-1)
             last_pos_prob = probs[0, -1]
-            probs = mask_weights(weights=last_pos_prob, softmax_nucleus_threshold=float(args.softmax_nucleus_threshold))
-
-
+            probs = mask_weights(weights=last_pos_prob, softmax_nucleus_threshold=float(softmax_nucleus_threshold))
             last_index_sampled = torch.multinomial(probs, num_samples=1, replacement=True)
-            model_input = torch.cat((model_input[..., 1:], last_index_sampled.view(1, -1)), dim=-1)
+            if model_input.shape[-1] == context_length:
+                # logger.debug(f"input {model_input.shape[-1]} is at max seq len ")
+                model_input = torch.cat((model_input[..., 1:], last_index_sampled.view(1, -1)), dim=-1)
+            else:
+                # logger.debug(f"input {model_input.shape[-1]} is under max seq len")
+                model_input = torch.cat((model_input, last_index_sampled.view(1, -1)), dim=-1)
             # logger.debug(f"last_index_sampled {last_index_sampled} Input is now {model_input}")
             best_token = last_index_sampled.item()
             print(tkn.decode([best_token]),end="",flush=True)

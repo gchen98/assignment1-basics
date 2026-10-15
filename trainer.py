@@ -51,7 +51,8 @@ def main():
         sys.exit(1)
 
     vocab_file = model_params['vocab_file']
-    checkpoint_file = model_params['checkpoint_file']
+    unopt_checkpoint_file = model_params['unopt_checkpoint_file']
+    opt_checkpoint_file = model_params['opt_checkpoint_file']
     context_length = model_params['context_length']
     embedding_dim = model_params['embedding_dim']
     num_layers = model_params['num_layers']
@@ -68,7 +69,7 @@ def main():
     vocab_size = len(vocab)
 
     # create the language model
-    model:torch.nn.Module = custom_modules.TransformerLm(vocab_size=vocab_size,
+    orig_model:torch.nn.Module = custom_modules.TransformerLm(vocab_size=vocab_size,
                                                   context_length=context_length,
                                                   num_layers=num_layers,
                                                   d_model=embedding_dim,
@@ -76,7 +77,8 @@ def main():
                                                   d_ff=feed_forward_dim,
                                                   rope_theta=rope_theta
                                                   )
-    model = torch.compile(model)
+
+    model = torch.compile(orig_model)
 
     cross_entropy_loss = custom_modules.CrossEntropyLoss()
 
@@ -92,10 +94,14 @@ def main():
 
     t:int = 0
     batch_size = int(args.batch_size)
-    checkpoint_path = Path(checkpoint_file)
-    if checkpoint_path.is_file():
-        t = custom_training.run_load_checkpoint(src=checkpoint_path,model=model,optimizer=optimizer)
-        logger.info(f"Loading checkpoint file {checkpoint_path} and starting at iteration {t}")
+
+
+    opt_checkpoint_path = Path(opt_checkpoint_file)
+    if opt_checkpoint_path.is_file():
+        t = custom_training.run_load_checkpoint(src=opt_checkpoint_path,model=model,optimizer=optimizer)
+        logger.info(f"Loading checkpoint file {opt_checkpoint_path} and starting at iteration {t}")
+
+    unopt_checkpoint_path = Path(unopt_checkpoint_file)
         # model = torch.compile(model)
         # custom_training.run_save_checkpoint(model=model, optimizer=optimizer, iteration=t, out="data/opt_tinystories_checkpoint.pt")
         # sys.exit(0)
@@ -140,7 +146,8 @@ def main():
         logger.info(f"Training iteration {t} took {iteration_time} seconds")
         if t % check_point_interval == 0:
             logger.info(f"Saving checkpoint at interval {t}")
-            custom_training.run_save_checkpoint(model=model, optimizer=optimizer, iteration=t, out=checkpoint_path)
+            custom_training.run_save_checkpoint(model=model, optimizer=optimizer, iteration=t, out=opt_checkpoint_path)
+            custom_training.run_save_checkpoint(model=orig_model, optimizer=optimizer, iteration=t, out=unopt_checkpoint_path)
             v_inputs, v_targets = custom_training.get_batch(dataset=validation, batch_size=batch_size,
                                                             context_length=context_length, device="cpu")
             validation_output = model(v_inputs)
@@ -150,7 +157,8 @@ def main():
         metrics_out.flush()
 
 
-    custom_training.run_save_checkpoint(model = model,optimizer=optimizer,iteration = t,out=checkpoint_path)
+    custom_training.run_save_checkpoint(model =model,optimizer=optimizer,iteration = t,out=opt_checkpoint_path)
+    custom_training.run_save_checkpoint(model=orig_model, optimizer=optimizer, iteration=t, out=unopt_checkpoint_path)
     metrics_out.close()
 
 
