@@ -42,7 +42,7 @@ def get_pretokens(full_string:str,special_tokens:list[str]|None)->list[str]:
     pretoken_pattern = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
     if special_tokens is not None:
         special_tokens = sorted(special_tokens, key=lambda k: len(k), reverse=True)
-        logger.debug("Special tokens are: %s", special_tokens)
+        logger.debug("In get_pretokens Special tokens are: %s", special_tokens)
         regex_pattern = "(" + "|".join(map(re.escape, special_tokens)) + ")"
         # logger.debug(regex_pattern)
         partitions = re.split(regex_pattern, full_string)
@@ -110,8 +110,9 @@ def run_train_bpe(
     #with open('../tests/fixtures/tinystories_sample_5M.txt', 'r') as f:
 
     # special_tokens=["<|endoftext|>","<|endoftext|><|endoftext|>","GARYSPLIT"]
+    logger.debug("1 in run train bpe Special tokens are: %s", special_tokens)
     special_tokens =sorted(special_tokens,key=lambda k:len(k),reverse=True)
-    logger.debug("Special tokens are: %s",special_tokens)
+    logger.debug("in run train bpe Special tokens are: %s",special_tokens)
 
     pretoken_pattern = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
     # phase 1: tally counts of each pre-token into a dict where the key is a tokens
@@ -234,6 +235,7 @@ def run_train_bpe(
                     best_byte_pair = (vocab[tokenpair[0]],vocab[tokenpair[1]])
             candidate = (best_token_pair,best_count)
 
+
         last_stale = True
         candidate2 = None
         while last_stale:
@@ -242,10 +244,10 @@ def run_train_bpe(
                 break
             else:
                 candidate2 = heapq.heappop(token_pair_heap)
+
                 last_stale = candidate2.stale
                 #print(popped)
         if CHECK_HEAP:
-            logger.debug(f"Candidate {candidate} Candidate2 {candidate2}")
             assert(candidate==(candidate2.token_pair,candidate2.counts))
         return candidate2.token_pair,candidate2.counts
         # return (max_key,max_val)
@@ -534,7 +536,7 @@ def run_train_bpe(
                     assert (counts_by_token_pair_oracle == incremental_counts_by_token_pair)
 
             else:
-                loggerning("Nothing was merged. Aborting")
+                logger.debug("Nothing was merged. Aborting")
                 break
             if len(vocab)>=MAX_TOKENS :
                 logger.info("Ending with vocab length %d. Aborting",len(vocab))
@@ -546,26 +548,10 @@ def run_train_bpe(
 
             counter+=1
 
-    # start_time = time.perf_counter()
-    #load_file(input_path)
-
-    # end_time = time.perf_counter()
-    # logger.info(f"Old load is {(end_time-start_time)}")
     start_time = time.perf_counter()
-    #workers = 4
-    # counts_by_pretoken.clear()
-    # load_file_parallel(False,workers,input_path)
-    # oldcounts = counts_by_pretoken.copy()
-    # #print(oldcounts)
-    # counts_by_pretoken.clear()
     load_file_parallel(True, workers, input_path)
-    # newcounts = counts_by_pretoken.copy()
-    #print(newcounts)
-    # assert(newcounts==oldcounts)
     end_time = time.perf_counter()
     logger.info(f"Parallel load time at {workers} workers is {(end_time - start_time)}")
-
-    # incremental_counts_by_token_pair = get_counts_by_token_pair(tokens_by_pretoken,counts_by_pretoken)
     incremental_counts_by_token_pair = get_counts_by_token_pair()
     end_time2 = time.perf_counter()
     logger.info(f"Initializing invariants table time is {(end_time2 - end_time)}")

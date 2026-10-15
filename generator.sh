@@ -1,1 +1,1 @@
-uv run python generator.py --vocab_file "data/vocab_tinystories_sample_5M.txt" --merges_filename "data/merges_tinystories_sample_5M.txt" --model_params "data/tinystories_config.yaml" --max_tokens_generated 10 --checkpoint_file "data/tinystories_checkpoint.pt" 
+uv run python generator.py --model_params "data/tinystories_config.yaml" --merges_filename "data/tinystories_merges.txt" --max_tokens_generated 200 --end_of_text "<|endoftext|>" --temperature 0.1 --softmax_nucleus_threshold 0.90

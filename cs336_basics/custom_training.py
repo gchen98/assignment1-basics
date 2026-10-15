@@ -101,7 +101,7 @@ def get_learning_rate_schedule(current_step:int,lr_max:float,lr_min:float,
     else:
         return lr_min
 
-def clip_gradient(parameters:Iterable[torch.nn.Parameter],max_l2_norm:float):
+def clip_gradient(parameters:Iterable[torch.nn.Parameter],max_l2_norm:float)->float:
     eps = 1e-6
     cached_parameters = list(parameters)
     ssq:float = 0
@@ -117,6 +117,8 @@ def clip_gradient(parameters:Iterable[torch.nn.Parameter],max_l2_norm:float):
                 # logger.debug(f"Before {parameter.grad}")
                 parameter.grad *= scaling
                 # logger.debug(f"After {parameter.grad}")
+    return l2_norm.item()
+
 def get_batch(dataset:np.array, batch_size:int, context_length: int, device:str)\
         ->tuple[torch.LongTensor,torch.LongTensor]:
     """
